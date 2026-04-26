@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card shadow-sm mx-auto mt-5" style="max-width: 400px;">
+    <div class="card-body p-4">
+        <h4 class="card-title text-center mb-4">{{ 'Вход' if action == 'login' else 'Регистрация' }}</h4>
+        <form method="POST" action="{{ url_for(action) }}">
+            <div class="mb-3">
+                <label class="form-label">Имя пользователя</label>
+                <input type="text" name="username" class="form-control" required>
+            </div>
+            <div class="mb-4">
+                <label class="form-label">Пароль</label>
+                <input type="password" name="password" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-primary w-100 fw-bold">{{ 'Войти' if action == 'login' else 'Зарегистрироваться' }}</button>
+        </form>
+        <div class="text-center mt-3">
+            {% if action == 'login' %}
+                <p>Нет аккаунта? <a href="{{ url_for('register') }}" class="text-decoration-none">Создать</a></p>
+            {% else %}
+                <p>Уже есть аккаунт? <a href="{{ url_for('login') }}" class="text-decoration-none">Войти</a></p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

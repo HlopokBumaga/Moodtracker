@@ -2,6 +2,8 @@ import os
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///moods.db'
@@ -13,27 +15,36 @@ app.secret_key = 'change_this_secret_key'
 db = SQLAlchemy(app)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# Настройка Flask-Login
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+login_manager.login_message = "Пожалуйста, войдите, чтобы получить доступ к этой странице."
+login_manager.login_message_category = "warning"
+
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 EMOJIS = {1: '😞', 2: '😐', 3: '🙂', 4: '😄', 5: '😁'}
 
+# --- Модели БД ---
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True, nullable=False)
+    password_hash = db.Column(db.String(200), nullable=False)
+    moods = db.relationship('Mood', backref='author', lazy=True, cascade="all, delete-orphan")
+
 class Mood(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     date = db.Column(db.String(20), nullable=False, default=lambda: datetime.now().strftime('%Y-%m-%d %H:%M'))
-    level = db.Column(db.Integer, nullable=False)
+    level = db.Column(db.Integer, nullable=False) # Общее настроение
+    stress = db.Column(db.Integer, default=3)     # Уровень стресса
+    sleep = db.Column(db.Integer, default=3)      # Качество сна
+    energy = db.Column(db.Integer, default=3)     # Уровень энергии
     note = db.Column(db.String(500), nullable=True)
     image = db.Column(db.String(255), nullable=True)
 
-    def to_dict(self, include_image_url=False):
-        data = {
-            'id': self.id,
-            'date': self.date,
-            'level': self.level,
-            'emoji': EMOJIS.get(self.level, '?'),
-            'note': self.note
-        }
-        if include_image_url and self.image:
-            data['image_url'] = url_for('static', filename=f'uploads/{self.image}', _external=True)
-        return data
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -48,15 +59,59 @@ def handle_image_upload():
     file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
     return filename
 
-# Routes
+# --- Маршруты авторизации ---
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form.get('username').strip()
+        password = request.form.get('password')
+        
+        if User.query.filter_by(username=username).first():
+            flash('Пользователь с таким именем уже существует.', 'error')
+            return redirect(url_for('register'))
+            
+        hashed_password = generate_password_hash(password)
+        new_user = User(username=username, password_hash=hashed_password)
+        db.session.add(new_user)
+        db.session.commit()
+        flash('Регистрация успешна! Теперь вы можете войти.', 'success')
+        return redirect(url_for('login'))
+    return render_template('auth.html', action='register')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username').strip()
+        password = request.form.get('password')
+        user = User.query.filter_by(username=username).first()
+        
+        if user and check_password_hash(user.password_hash, password):
+            login_user(user)
+            return redirect(url_for('index'))
+        else:
+            flash('Неверное имя пользователя или пароль.', 'error')
+    return render_template('auth.html', action='login')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+# --- Основные маршруты ---
 @app.route('/')
+@login_required
 def index():
-    moods = Mood.query.order_by(Mood.date.desc()).limit(10).all()
+    moods = Mood.query.filter_by(user_id=current_user.id).order_by(Mood.date.desc()).limit(10).all()
     return render_template('index.html', moods=moods, emojis=EMOJIS)
 
 @app.route('/add', methods=['POST'])
+@login_required
 def add_mood():
     level = request.form.get('level', type=int)
+    stress = request.form.get('stress', type=int)
+    sleep = request.form.get('sleep', type=int)
+    energy = request.form.get('energy', type=int)
     note = request.form.get('note', '').strip()
     
     if level not in EMOJIS:
@@ -69,19 +124,26 @@ def add_mood():
         flash(f'⚠️ {e}', 'error')
         return redirect(url_for('index'))
 
-    db.session.add(Mood(level=level, note=note, image=filename))
+    new_mood = Mood(user_id=current_user.id, level=level, stress=stress, sleep=sleep, energy=energy, note=note, image=filename)
+    db.session.add(new_mood)
     db.session.commit()
-    flash('Успешно сохранено!', 'success')
+    flash('Запись успешно сохранена!', 'success')
     return redirect(url_for('index'))
 
 @app.route('/history')
+@login_required
 def history():
-    moods = Mood.query.order_by(Mood.date.desc()).all()
+    moods = Mood.query.filter_by(user_id=current_user.id).order_by(Mood.date.desc()).all()
     return render_template('history.html', moods=moods, emojis=EMOJIS)
 
 @app.route('/delete/<int:mood_id>')
+@login_required
 def delete_mood(mood_id):
     mood = Mood.query.get_or_404(mood_id)
+    if mood.user_id != current_user.id:
+        flash('У вас нет прав для удаления этой записи.', 'error')
+        return redirect(url_for('history'))
+        
     if mood.image:
         path = os.path.join(app.config['UPLOAD_FOLDER'], mood.image)
         if os.path.exists(path):
@@ -91,88 +153,8 @@ def delete_mood(mood_id):
     flash('Запись удалена.', 'info')
     return redirect(url_for('history'))
 
-# Api
-@app.route('/api/moods', methods=['GET'])
-def api_get_moods():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    level = request.args.get('level', type=int)
-
-    stmt = db.select(Mood).order_by(Mood.date.desc())
-    if level:
-        stmt = stmt.filter_by(level=level)
-        
-    pagination = db.paginate(stmt, page=page, per_page=per_page, error_out=False)
-    moods = [m.to_dict(include_image_url=True) for m in pagination.items]
-
-    return jsonify({
-        'data': moods,
-        'pagination': {
-            'page': pagination.page,
-            'per_page': pagination.per_page,
-            'total': pagination.total,
-            'pages': pagination.pages
-        }
-    })
-
-@app.route('/api/moods/<int:mood_id>', methods=['GET'])
-def api_get_mood(mood_id):
-    mood = Mood.query.get_or_404(mood_id)
-    return jsonify(mood.to_dict(include_image_url=True))
-
-@app.route('/api/moods', methods=['POST'])
-def api_create_mood():
-    # Поддержка JSON и multipart/form-data
-    if request.content_type and 'multipart/form-data' in request.content_type:
-        level = request.form.get('level', type=int)
-        note = request.form.get('note', '').strip()
-    else:
-        data = request.get_json(silent=True) or {}
-        level = data.get('level')
-        note = str(data.get('note', '')).strip()
-
-    if level not in EMOJIS:
-        return jsonify({'error': 'Неверный уровень настроения (1-5)'}), 400
-
-    try:
-        filename = handle_image_upload()
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-
-    mood = Mood(level=level, note=note, image=filename)
-    db.session.add(mood)
-    db.session.commit()
-    return jsonify(mood.to_dict(include_image_url=True)), 201
-
-@app.route('/api/moods/<int:mood_id>', methods=['PUT', 'PATCH'])
-def api_update_mood(mood_id):
-    mood = Mood.query.get_or_404(mood_id)
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Требуется JSON тело запроса'}), 400
-
-    if 'level' in data:
-        if data['level'] not in EMOJIS:
-            return jsonify({'error': 'Неверный уровень настроения'}), 400
-        mood.level = data['level']
-    if 'note' in data:
-        mood.note = data['note']
-        
-    db.session.commit()
-    return jsonify(mood.to_dict(include_image_url=True))
-
-@app.route('/api/moods/<int:mood_id>', methods=['DELETE'])
-def api_delete_mood(mood_id):
-    mood = Mood.query.get_or_404(mood_id)
-    if mood.image:
-        path = os.path.join(app.config['UPLOAD_FOLDER'], mood.image)
-        if os.path.exists(path):
-            os.remove(path)
-    db.session.delete(mood)
-    db.session.commit()
-    return jsonify({'message': 'Запись удалена'}), 200
-
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    # host='0.0.0.0' заставляет Flask "слушать" все сетевые адреса компьютера
+    app.run(debug=True, host='0.0.0.0')
