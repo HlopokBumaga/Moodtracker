@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
+from flask import Flask, request, render_template, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -15,7 +15,6 @@ app.secret_key = 'change_this_secret_key'
 db = SQLAlchemy(app)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Настройка Flask-Login
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message = "Пожалуйста, войдите, чтобы получить доступ к этой странице."
@@ -35,10 +34,10 @@ class Mood(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     date = db.Column(db.String(20), nullable=False, default=lambda: datetime.now().strftime('%Y-%m-%d %H:%M'))
-    level = db.Column(db.Integer, nullable=False) # Общее настроение
-    stress = db.Column(db.Integer, default=3)     # Уровень стресса
-    sleep = db.Column(db.Integer, default=3)      # Качество сна
-    energy = db.Column(db.Integer, default=3)     # Уровень энергии
+    level = db.Column(db.Integer, nullable=False)
+    stress = db.Column(db.Integer, default=3)
+    sleep = db.Column(db.Integer, default=3)
+    energy = db.Column(db.Integer, default=3)
     note = db.Column(db.String(500), nullable=True)
     image = db.Column(db.String(255), nullable=True)
 
@@ -156,5 +155,4 @@ def delete_mood(mood_id):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    # host='0.0.0.0' заставляет Flask "слушать" все сетевые адреса компьютера
-    app.run(debug=True, host='0.0.0.0')
+    app.run()
